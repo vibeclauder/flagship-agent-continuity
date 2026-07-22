@@ -1,56 +1,102 @@
-# flagship-agent-continuity
+# Agent Continuity Kit
 
-Reference implementation of a continuity pattern for long-running, unattended
-Claude Code agent sessions: detect a dead or stalled worker, launch a
-successor, and keep an auditable record of every handoff. Paired with a
-strict revenue-state ledger that refuses to count pipeline activity
-(leads, proposals, deposits) as recognized revenue until an opportunity
-reaches a terminal `settled` state.
+A small, dependency-free reference implementation for keeping an autonomous worker moving when it crashes, stalls, or reaches a handoff boundary.
 
-All business-specific detail (mission text, prompts, payment rails) is
-intentionally absent — this repo demonstrates the mechanism only.
+It demonstrates four operational controls:
 
-## Why this exists
+- a machine-readable handoff identifying the current worker;
+- a progress heartbeat that distinguishes “alive” from “making progress”;
+- a watchdog that launches a successor after death or silence;
+- an append-only opportunity ledger that never counts pipeline activity as revenue.
 
-Autonomous agent sessions eventually die, hang, or lose their process. A
-supervisor needs to answer two questions cheaply and correctly:
+This repository was built after a real unattended agent loop stopped while its operator was offline. The tests reproduce successful completion, a live-but-stalled worker, explicit shutdown, and accounting-integrity failures.
 
-1. Is a worker currently alive?
-2. Is that worker actually making progress, or just alive and stuck?
+## Quick verification
 
-`bin/watchdog.sh` polls for both. If no worker is alive, it launches a
-successor. If a worker is alive but hasn't written a progress heartbeat
-within `STALL_SECONDS`, it treats that as a hang (not a crash) and launches
-a recovery successor anyway — the "alive but wedged" failure mode a plain
-liveness check misses.
+Requirements: macOS, Node.js 18+, Bash, and Zsh. No package installation is required.
 
-## Layout
-
-- `bin/watchdog.sh` — polls `handoff.json` + `progress.log`, launches
-  successors on no-worker or stall, exits cleanly on a `STOP` file.
-- `lib/handoff.js` — handoff state: active worker pid, liveness check,
-  append-only history of every start/complete/successor event.
-- `lib/ledger.js` — append-only JSON-Lines ledger with an explicit state
-  machine (`lead -> qualified -> proposal_sent -> deposit_received ->
-  settled`, plus `lost` from any non-terminal state). Illegal transitions
-  and zero/missing amounts on `deposit_received`/`settled` are rejected,
-  not silently accepted.
-- `lib/worker.js` — a simulated worker with `complete` / `stall` / `crash`
-  modes, used by the tests to exercise every watchdog path deterministically.
-- `tests/` — 4 test files, 25 checks: ledger transition/accounting
-  correctness, healthy completion, stall detection + recovery, and
-  explicit stop control. Run all of them with `tests/run-all.sh`.
-
-## Run it
-
-```sh
-tests/run-all.sh
+```bash
+git clone https://github.com/vibeclauder/flagship-agent-continuity.git
+cd flagship-agent-continuity
+bash tests/run-all.sh
 ```
 
-Or drive the watchdog directly against a scratch run directory:
+The suite exits nonzero on failure. It verifies:
 
-```sh
-RUN_DIR=./run POLL_INTERVAL=2 STALL_SECONDS=30 bin/watchdog.sh
+- legal and illegal opportunity-state transitions;
+- recognition of revenue only after settlement;
+- rejection of missing, zero, and nonnumeric payment amounts;
+- successful worker completion without false stall detection;
+- recovery from a worker that remains alive but stops writing progress;
+- shutdown when an operator creates the `STOP` file.
+
+## Run the demonstration
+
+Healthy completion:
+
+```bash
+RUN_DIR="$PWD/run" \
+POLL_INTERVAL=1 \
+STALL_SECONDS=10 \
+WORKER_MODE=complete \
+MAX_LAUNCHES=1 \
+  ./bin/watchdog.sh
 ```
 
-Stop it with `touch ./run/STOP`.
+Stall recovery:
+
+```bash
+RUN_DIR="$PWD/run" \
+POLL_INTERVAL=1 \
+STALL_SECONDS=3 \
+WORKER_MODE=stall \
+MAX_LAUNCHES=2 \
+  ./bin/watchdog.sh
+```
+
+Create `run/STOP` to stop an unlimited watchdog loop.
+
+## Components
+
+| Component | Responsibility |
+|---|---|
+| `lib/handoff.js` | Records worker ownership, liveness, progress, completion, and successor history. |
+| `bin/watchdog.sh` | Polls liveness and progress age, launches a successor, logs the reason, and honors `STOP`. |
+| `lib/worker.js` | Simulates healthy, crashed, and stalled workers for deterministic failure testing. |
+| `lib/ledger.js` | Replays an append-only JSONL event log and recognizes only settled revenue. |
+| `tests/` | Exercises completion, stall recovery, stop control, and ledger invariants end to end. |
+
+## Accounting invariant
+
+```text
+lead -> qualified -> proposal_sent -> deposit_received -> settled
+  \         \              \                    \
+   +-> lost  +-> lost        +-> lost             +-> lost
+```
+
+Only a terminal `settled` event with a positive finite amount contributes to `settledRevenue`. Leads, proposals, deposits, application values, and simulated opportunity values are not treated as earned money.
+
+## Simulation disclosure
+
+`lib/worker.js` uses fabricated opportunity IDs and amounts to test state transitions. Those values are test fixtures—not clients, contracts, deposits, or real revenue. The kit contains no credentials, customer information, payment details, or production business data.
+
+## Adapting it to a real orchestrator
+
+Replace the simulated worker launcher with your agent runtime while preserving the protocol:
+
+1. Register the successor and its process/session identifier.
+2. Write a heartbeat only after material progress, not merely on a timer.
+3. Persist a concise mission handoff before context or usage exhaustion.
+4. Log why every successor was launched.
+5. Require an explicit operator-controlled stop mechanism.
+6. Keep commercial accounting separate from agent activity metrics.
+
+For a distributed deployment, replace local JSON/JSONL files and PID checks with transactional storage, leases, idempotency keys, and runtime-native health checks. This repository is a single-host reference pattern, not a claim of production-grade distributed consensus.
+
+## Known boundary
+
+The watchdog starts a successor when a stalled process remains alive; an integration adapter should terminate or quarantine the superseded worker after verifying the handoff. That policy is runtime-specific and deliberately not guessed here.
+
+## License
+
+MIT
