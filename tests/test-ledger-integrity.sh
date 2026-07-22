@@ -63,6 +63,11 @@ node "$LEDGER" record opp-6 proposal_sent >/dev/null 2>&1
 node "$LEDGER" record opp-6 deposit_received 400 >/dev/null 2>&1
 expect_fail "settled requires a positive amount, not omitted" record opp-6 settled
 
+node "$LEDGER" record opp-7 lead >/dev/null 2>&1
+node "$LEDGER" record opp-7 qualified >/dev/null 2>&1
+node "$LEDGER" record opp-7 proposal_sent >/dev/null 2>&1
+expect_fail "non-numeric deposit amounts are rejected" record opp-7 deposit_received not-a-number
+
 echo "== lost is reachable from any non-terminal state =="
 node "$LEDGER" record opp-5 lead >/dev/null 2>&1
 expect_ok "lead -> lost is valid" record opp-5 lost
