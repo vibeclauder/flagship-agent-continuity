@@ -3,3 +3,4 @@ sample-run/
 tests/tmp/
 node_modules/
 .claude/
+.playwright-mcp/
